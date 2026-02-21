@@ -1,0 +1,122 @@
+default_agent: line_agentcore
+agents:
+  agent:
+    name: agent
+    language: python
+    node_version: '20'
+    entrypoint: /Users/yakumoshinnosuke/Desktop/LINE_AgentCore/src/agent.py
+    deployment_type: direct_code_deploy
+    runtime_type: PYTHON_3_12
+    platform: linux/arm64
+    container_runtime: null
+    source_path: /Users/yakumoshinnosuke/Desktop/LINE_AgentCore/src
+    aws:
+      execution_role: arn:aws:iam::017820658462:role/AmazonBedrockAgentCoreSDKRuntime-us-west-2-d4f0bc5a29
+      execution_role_auto_create: false
+      account: 017820658462
+      region: us-west-2
+      ecr_repository: null
+      ecr_auto_create: false
+      s3_path: s3://bedrock-agentcore-codebuild-sources-017820658462-us-west-2
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: null
+      agent_arn: null
+      agent_session_id: null
+    codebuild:
+      project_name: null
+      execution_role: null
+      source_bucket: null
+    memory:
+      mode: STM_ONLY
+      memory_id: agent_mem-pROjEZD1Cl
+      memory_arn: arn:aws:bedrock-agentcore:us-west-2:017820658462:memory/agent_mem-pROjEZD1Cl
+      memory_name: agent_mem
+      event_expiry_days: 30
+      first_invoke_memory_check_done: true
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false
+  line_agentcore:
+    name: line_agentcore
+    language: python
+    node_version: '20'
+    entrypoint: /Users/yakumoshinnosuke/Desktop/LINE_AgentCore/src/agent.py
+    deployment_type: direct_code_deploy
+    runtime_type: PYTHON_3_12
+    platform: linux/arm64
+    container_runtime: null
+    source_path: /Users/yakumoshinnosuke/Desktop/LINE_AgentCore/src
+    aws:
+      execution_role: arn:aws:iam::017820658462:role/AmazonBedrockAgentCoreSDKRuntime-us-west-2-af9dc0ef3b
+      execution_role_auto_create: false
+      account: 017820658462
+      region: us-west-2
+      ecr_repository: null
+      ecr_auto_create: false
+      s3_path: s3://bedrock-agentcore-codebuild-sources-017820658462-us-west-2
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: line_agentcore-dsoclNGvM6
+      agent_arn: arn:aws:bedrock-agentcore:us-west-2:017820658462:runtime/line_agentcore-dsoclNGvM6
+      agent_session_id: null
+    codebuild:
+      project_name: null
+      execution_role: null
+      source_bucket: null
+    memory:
+      mode: STM_ONLY
+      memory_id: line_agentcore_mem-9qQz574MzM
+      memory_arn: arn:aws:bedrock-agentcore:us-west-2:017820658462:memory/line_agentcore_mem-9qQz574MzM
+      memory_name: line_agentcore_mem
+      event_expiry_days: 30
+      first_invoke_memory_check_done: true
+      was_created_by_toolkit: true
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false

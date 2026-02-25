@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import urllib.parse
@@ -12,17 +13,48 @@ from strands.models import BedrockModel
 # ========== ENV ==========
 # キーはRuntimeの環境変数から取得
 MODEL_ID = (os.environ.get("MODEL_ID") or "us.anthropic.claude-haiku-4-5-20251001-v1:0").strip()
-TAVILY_API_KEY = (os.environ.get("TAVILY_API_KEY") or "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").strip()
-RECRUIT_HOTPEPPER_API_KEY = (os.environ.get("RECRUIT_HOTPEPPER_API_KEY") or "f8bfe237f4e839dc").strip()
+TAVILY_API_KEY = (os.environ.get("TAVILY_API_KEY")).strip()
+RECRUIT_HOTPEPPER_API_KEY = (os.environ.get("RECRUIT_HOTPEPPER_API_KEY")).strip()
+SEARCH_DEBUG = (os.environ.get("SEARCH_DEBUG") or "0").strip().lower() in {"1", "true", "yes", "on"}
 
 # ========== In-memory session state ==========
 # PoC: Dynamoなしで「最後の位置情報」をセッション単位に保持
 _SESSION_LOCATION: Dict[str, Dict[str, Any]] = {}
 # 直近の店舗候補（位置情報は非表示のまま保持し、選択時に位置情報を返す）
 _SESSION_RECOMMENDATIONS: Dict[str, List[Dict[str, Any]]] = {}
+_LOG = logging.getLogger(__name__)
 
 app = BedrockAgentCoreApp()
 _LOCATION_CMD_PREFIX = "__set_location__"
+_EXIT_TOKENS = ("東口", "西口", "南口", "北口")
+_OPPOSITE_EXIT = {"東口": "西口", "西口": "東口", "南口": "北口", "北口": "南口"}
+_FOOD_TERMS = (
+    "もんじゃ",
+    "お好み焼き",
+    "鉄板焼き",
+    "たこ焼き",
+    "餃子",
+    "焼き鳥",
+    "居酒屋",
+    "ラーメン",
+    "寿司",
+    "焼肉",
+    "中華",
+    "イタリアン",
+    "フレンチ",
+    "和食",
+    "定食",
+    "海鮮",
+    "そば",
+    "うどん",
+    "カフェ",
+    "バー",
+    "ビストロ",
+    "バル",
+    "おでん",
+    "串焼き",
+    "串カツ",
+)
 
 
 # ========== Helpers ==========
@@ -44,6 +76,15 @@ def _http_post_json(url: str, payload: Dict[str, Any], timeout: int = 20) -> Dic
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8", errors="replace")
     return json.loads(raw)
+
+
+def _debug_log(message: str, **kwargs: Any) -> None:
+    if not SEARCH_DEBUG:
+        return
+    if kwargs:
+        _LOG.info("%s | %s", message, json.dumps(kwargs, ensure_ascii=False))
+    else:
+        _LOG.info("%s", message)
 
 
 def _norm_query(q: str) -> str:
@@ -215,12 +256,15 @@ def _format_selected_shop_location(shop: Dict[str, Any]) -> str:
 
 def _sanitize_food_keyword(text: str) -> str:
     q = _norm_query(text).replace("　", " ")
-    q = re.sub(r"[?？!！。、「」『』（）()]+", " ", q)
+    q = re.sub(r"[?？!！。、「」『』（）()【】\[\]<>]+", " ", q)
+    q = re.sub(r"(東口|西口|南口|北口)\s*側", r"\1", q)
+    q = re.sub(r"(東口|西口|南口|北口)\s*(エリア|あたり|辺り|方面)", r"\1", q)
 
     strip_patterns = [
         r"(近く|この辺|このへん|周辺|近所|付近|最寄り|ここらへん|ここら辺)の?",
         r"(おすすめ|オススメ)",
         r"(を)?(探して|探す|調べて|教えて|知りたい)",
+        r"(で|を)?(お願い|お願いします|教えてください|知りたいです)$",
         r"(ありますか|ある|ない)$",
         r"^(飲食店|お店|店)$",
     ]
@@ -229,6 +273,72 @@ def _sanitize_food_keyword(text: str) -> str:
 
     q = re.sub(r"\s+", " ", q).strip(" 、")
     return q or "飲食店"
+
+
+def _dedupe_strs(values: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for v in values:
+        t = _norm_query(v)
+        if not t:
+            continue
+        if t in seen:
+            continue
+        out.append(t)
+        seen.add(t)
+    return out
+
+
+def _extract_food_terms(text: str) -> List[str]:
+    found: List[str] = []
+    src = _norm_query(text)
+    for term in _FOOD_TERMS:
+        if term in src:
+            found.append(term)
+    return _dedupe_strs(found)
+
+
+def _split_compound_token(token: str) -> List[str]:
+    cur = token.strip()
+    if not cur:
+        return []
+
+    parts = [cur]
+    changed = True
+    while changed:
+        changed = False
+        next_parts: List[str] = []
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+
+            station_match = re.match(r"^(.+?駅)(.+)$", p)
+            if station_match:
+                next_parts.append(station_match.group(1))
+                next_parts.append(station_match.group(2))
+                changed = True
+                continue
+
+            split_done = False
+            for marker in (*_EXIT_TOKENS, "駅前"):
+                if marker in p and p != marker:
+                    left, right = p.split(marker, 1)
+                    if left.strip():
+                        next_parts.append(left.strip())
+                    next_parts.append(marker)
+                    if right.strip():
+                        next_parts.append(right.strip())
+                    changed = True
+                    split_done = True
+                    break
+            if split_done:
+                continue
+
+            next_parts.append(p)
+        parts = next_parts
+
+    return [p for p in parts if p]
 
 
 def _keyword_tokens(keyword: str) -> List[str]:
@@ -246,12 +356,59 @@ def _keyword_tokens(keyword: str) -> List[str]:
         "お店",
         "店",
     }
-    tokens = []
+    tokens: List[str] = []
     for token in _norm_query(keyword).split(" "):
-        t = token.strip()
-        if t and t not in ignored:
-            tokens.append(t)
-    return tokens
+        expanded = _split_compound_token(token.strip())
+        if not expanded:
+            expanded = [token.strip()]
+        for t in expanded:
+            if t and t not in ignored:
+                tokens.append(t)
+
+    uniq: List[str] = []
+    seen = set()
+    for t in tokens:
+        if t not in seen:
+            uniq.append(t)
+            seen.add(t)
+    return uniq
+
+
+def _build_hotpepper_keyword_candidates(cleaned_keyword: str, tokens: List[str]) -> List[str]:
+    candidates: List[str] = [cleaned_keyword]
+
+    station_tokens = [t for t in tokens if t.endswith("駅")]
+    direction_tokens = [t for t in tokens if t in _EXIT_TOKENS]
+    ignored_generic = {"側", "エリア", "方面", "あたり", "辺り"}
+    generic_tokens = [
+        t for t in tokens if t not in _EXIT_TOKENS and not t.endswith("駅") and t not in ignored_generic
+    ]
+
+    food_tokens: List[str] = []
+    for t in generic_tokens:
+        expanded = _extract_food_terms(t)
+        if expanded:
+            food_tokens.extend(expanded)
+        elif len(t) >= 2:
+            food_tokens.append(t)
+    food_tokens = _dedupe_strs(food_tokens)
+
+    if food_tokens:
+        candidates.append(" ".join(food_tokens))
+        if station_tokens:
+            candidates.append(" ".join([station_tokens[0], *food_tokens]))
+        if station_tokens and direction_tokens:
+            candidates.append(" ".join([station_tokens[0], direction_tokens[0], *food_tokens]))
+        if len(food_tokens) > 1:
+            candidates.append(food_tokens[0])
+    else:
+        if station_tokens and direction_tokens:
+            candidates.append(" ".join([station_tokens[0], direction_tokens[0]]))
+        if station_tokens:
+            candidates.append(station_tokens[0])
+        candidates.append("飲食店")
+
+    return _dedupe_strs(candidates)[:6]
 
 
 def _hotpepper_query(lat: float, lng: float, keyword: str, range_level: int, count: int) -> List[Dict[str, Any]]:
@@ -270,26 +427,110 @@ def _hotpepper_query(lat: float, lng: float, keyword: str, range_level: int, cou
     return (((data.get("results") or {}).get("shop")) or [])
 
 
-def _filter_shops_by_tokens(shops: List[Dict[str, Any]], tokens: List[str]) -> List[Dict[str, Any]]:
+def _shop_search_blob(shop: Dict[str, Any]) -> str:
+    return " ".join(
+        [
+            (shop.get("name") or ""),
+            ((shop.get("genre") or {}).get("name") or ""),
+            (shop.get("catch") or ""),
+            (shop.get("access") or ""),
+            (shop.get("address") or ""),
+        ]
+    ).lower()
+
+
+def _shop_identity(shop: Dict[str, Any]) -> str:
+    sid = str(shop.get("id") or "").strip()
+    if sid:
+        return sid
+
+    name = str(shop.get("name") or "").strip()
+    address = str(shop.get("address") or "").strip()
+    lat = str(shop.get("lat") or "").strip()
+    lng = str(shop.get("lng") or "").strip()
+    return "|".join([name, address, lat, lng])
+
+
+def _score_shop_for_tokens(shop: Dict[str, Any], tokens: List[str]) -> Tuple[int, int, bool, bool]:
     if not tokens:
-        return shops
+        return 0, 0, False, False
 
-    out = []
-    for s in shops:
-        hay = " ".join(
-            [
-                (s.get("name") or ""),
-                ((s.get("genre") or {}).get("name") or ""),
-                (s.get("catch") or ""),
-                (s.get("access") or ""),
-                (s.get("address") or ""),
-            ]
-        ).lower()
+    directions = [t for t in tokens if t in _EXIT_TOKENS]
+    stations = [t for t in tokens if t.endswith("駅")]
+    generic = [t for t in tokens if t not in _EXIT_TOKENS and not t.endswith("駅")]
+    hay = _shop_search_blob(shop)
 
-        if all(t.lower() in hay for t in tokens):
-            out.append(s)
+    score = 0
+    matched = 0
+    direction_hit = False
+    opposite_hit = False
 
-    return out
+    for d in directions:
+        if d.lower() in hay:
+            score += 8
+            matched += 1
+            direction_hit = True
+        else:
+            score -= 1
+
+        opposite = _OPPOSITE_EXIT.get(d)
+        if opposite and opposite.lower() in hay:
+            score -= 8
+            opposite_hit = True
+
+    for s in stations:
+        if s.lower() in hay:
+            score += 5
+            matched += 1
+
+    for t in generic:
+        if t.lower() in hay:
+            score += 2
+            matched += 1
+
+    return score, matched, direction_hit, opposite_hit
+
+
+def _prioritize_shops_by_tokens(shops: List[Dict[str, Any]], tokens: List[str]) -> Tuple[List[Dict[str, Any]], bool]:
+    if not shops:
+        return [], False
+
+    if not tokens:
+        return shops, False
+
+    has_direction = any(t in _EXIT_TOKENS for t in tokens)
+    scored = []
+    for idx, shop in enumerate(shops):
+        score, matched, direction_hit, opposite_hit = _score_shop_for_tokens(shop, tokens)
+        scored.append(
+            {
+                "shop": shop,
+                "score": score,
+                "matched": matched,
+                "direction_hit": direction_hit,
+                "opposite_hit": opposite_hit,
+                "idx": idx,
+            }
+        )
+
+    def _sorted(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return sorted(rows, key=lambda row: (row["score"], row["matched"], -row["idx"]), reverse=True)
+
+    strict = [
+        row
+        for row in scored
+        if row["matched"] > 0
+        and (not has_direction or (row["direction_hit"] and not row["opposite_hit"]))
+    ]
+    if strict:
+        return [row["shop"] for row in _sorted(strict)], True
+
+    # 出口指定がある場合は反対出口を含む候補を除外して返す
+    non_opposite = [row for row in scored if not row["opposite_hit"]]
+    if non_opposite:
+        return [row["shop"] for row in _sorted(non_opposite)], False
+
+    return [row["shop"] for row in _sorted(scored)], False
 
 
 def _range_label(range_level: int) -> str:
@@ -333,7 +574,7 @@ def _search_hotpepper_with_expansion(
     lng: float,
     keyword: str,
     start_range: int = 2,
-    count: int = 10,
+    count: int = 20,
 ) -> str:
     if not RECRUIT_HOTPEPPER_API_KEY:
         return "RECRUIT_HOTPEPPER_API_KEY が未設定です。"
@@ -343,36 +584,114 @@ def _search_hotpepper_with_expansion(
     count = max(1, min(50, int(count)))
 
     tokens = _keyword_tokens(cleaned_keyword)
+    keyword_candidates = _build_hotpepper_keyword_candidates(cleaned_keyword, tokens)
+    _debug_log(
+        "hotpepper_search_start",
+        session_id=session_id,
+        original_keyword=keyword,
+        cleaned_keyword=cleaned_keyword,
+        tokens=tokens,
+        keyword_candidates=keyword_candidates,
+        range_start=range_start,
+        count=count,
+    )
+
+    has_direction = any(t in _EXIT_TOKENS for t in tokens)
     fallback_shops: List[Dict[str, Any]] = []
     fallback_range: Optional[int] = None
 
     for range_level in range(range_start, 6):
-        shops = _hotpepper_query(
-            lat=lat,
-            lng=lng,
-            keyword=cleaned_keyword,
-            range_level=range_level,
-            count=count,
-        )
+        merged: Dict[str, Dict[str, Any]] = {}
+        for candidate in keyword_candidates:
+            queried = _hotpepper_query(
+                lat=lat,
+                lng=lng,
+                keyword=candidate,
+                range_level=range_level,
+                count=count,
+            )
+            _debug_log(
+                "hotpepper_query",
+                session_id=session_id,
+                range_level=range_level,
+                candidate=candidate,
+                hit_count=len(queried),
+            )
+
+            if queried:
+                for shop in queried:
+                    identity = _shop_identity(shop)
+                    if identity and identity not in merged:
+                        merged[identity] = shop
+
+            shops = list(merged.values())
+            if not shops:
+                continue
+
+            prioritized, strict_match = _prioritize_shops_by_tokens(shops, tokens)
+            if strict_match:
+                _debug_log(
+                    "hotpepper_strict_match",
+                    session_id=session_id,
+                    range_level=range_level,
+                    candidate=candidate,
+                    merged_hit_count=len(shops),
+                    return_count=min(5, len(prioritized)),
+                )
+                _set_recommendations(session_id, prioritized, limit=5)
+                return _format_shop_results(
+                    prioritized,
+                    keyword=cleaned_keyword,
+                    used_range=range_level,
+                    start_range=range_start,
+                    relaxed=False,
+                )
+
+            # 出口指定がない場合は最初に得られた有効候補で返す
+            if not has_direction and prioritized:
+                _debug_log(
+                    "hotpepper_best_effort_match",
+                    session_id=session_id,
+                    range_level=range_level,
+                    candidate=candidate,
+                    merged_hit_count=len(shops),
+                    return_count=min(5, len(prioritized)),
+                )
+                _set_recommendations(session_id, prioritized, limit=5)
+                return _format_shop_results(
+                    prioritized,
+                    keyword=cleaned_keyword,
+                    used_range=range_level,
+                    start_range=range_start,
+                    relaxed=False,
+                )
+
+        shops = list(merged.values())
         if not shops:
             continue
 
         if not fallback_shops:
-            fallback_shops = shops
+            ranked_default, _ = _prioritize_shops_by_tokens(shops, tokens)
+            fallback_shops = ranked_default or shops
             fallback_range = range_level
-
-        matched = _filter_shops_by_tokens(shops, tokens)
-        if matched:
-            _set_recommendations(session_id, matched, limit=5)
-            return _format_shop_results(
-                matched,
-                keyword=cleaned_keyword,
-                used_range=range_level,
-                start_range=range_start,
-                relaxed=False,
+            _debug_log(
+                "hotpepper_set_fallback",
+                session_id=session_id,
+                range_level=range_level,
+                fallback_count=len(fallback_shops),
             )
 
+        # 出口指定がある場合は厳密一致を優先するため、後続レンジでも探索を続ける
+        if has_direction:
+            continue
+
     if fallback_shops:
+        _debug_log(
+            "hotpepper_return_fallback",
+            session_id=session_id,
+            fallback_range=fallback_range,
+            return_count=min(5, len(fallback_shops)),
+        )
         _set_recommendations(session_id, fallback_shops, limit=5)
         return _format_shop_results(
             fallback_shops,
@@ -383,7 +702,39 @@ def _search_hotpepper_with_expansion(
         )
 
     _clear_recommendations(session_id)
+    _debug_log("hotpepper_not_found", session_id=session_id)
     return "条件に合う店舗が見つかりませんでした。キーワードを変えるか、別の場所でお試しください。"
+
+
+def _looks_like_restaurant_query(text: str) -> bool:
+    q = _norm_query(text)
+    if not q:
+        return False
+
+    if _looks_like_shop_selection(q):
+        return False
+
+    non_restaurant_hints = (
+        "天気",
+        "ニュース",
+        "株価",
+        "為替",
+        "エラー",
+        "バグ",
+        "AWS",
+        "コード",
+    )
+    if any(h in q for h in non_restaurant_hints):
+        return False
+
+    patterns = (
+        r"(飲食店|グルメ|ご飯|食事|ランチ|ディナー|居酒屋|レストラン|カフェ|喫茶|ラーメン|寿司|焼肉|焼き鳥|中華|イタリアン|フレンチ|和食|定食|海鮮|そば|うどん|バー|飲み)",
+        r"(近く|この辺|このへん|周辺|付近|最寄り|駅前|東口|西口|南口|北口).*(店|飲食|ご飯|ランチ|ディナー|居酒屋|レストラン|カフェ|屋|屋さん)",
+    )
+    if any(re.search(pat, q) for pat in patterns):
+        return True
+
+    return bool(_extract_food_terms(q))
 
 
 def _looks_like_shop_selection(text: str) -> bool:
@@ -507,6 +858,7 @@ def _build_system_prompt(session_id: str) -> str:
 重要なルール:
 ・「近く」「この辺」「周辺」などは、保存済み位置情報の周辺を意味します。
 ・飲食店検索時、ユーザー文をそのままAPIに渡さず、料理ジャンル・業態・条件に要約したキーワードで restaurant_search を使ってください。
+・飲食店の検索やおすすめは必ず Hotpepper API（restaurant_search）を使ってください。一般Web検索をメインにしないでください。
 ・飲食店の問い合わせでは、まず restaurant_search を優先し、補足情報が必要なときだけ websearch を併用してください。
 ・restaurant_search の返答では、複数候補を提示し、まだ位置情報（住所/座標/地図リンク）は出さないでください。
 ・ユーザーが候補を選んだら restaurant_location を使って、その店舗の位置情報を返してください。
@@ -528,7 +880,7 @@ def _build_agent(session_id: str) -> Agent:
         return _web_search(query=query, max_results=max_results)
 
     @tool
-    def restaurant_search(keyword: str, range_level: int = 2, count: int = 10) -> str:
+    def restaurant_search(keyword: str, range_level: int = 2, count: int = 20) -> str:
         """
         保存済み位置情報を基準に、Hotpepperで飲食店を検索します。
         range_level: 1=300m,2=500m,3=1000m,4=2000m,5=3000m
@@ -612,6 +964,21 @@ def _deterministic_response(prompt: str, session_id: str) -> Optional[str]:
     # 挨拶は検索しない
     if _looks_like_greeting(q):
         return "こんにちは。何を探しますか？ 例: 近くの家系ラーメン / この辺の居酒屋"
+
+    # 飲食店の検索・おすすめは決定論でHotpepperに寄せる
+    if _looks_like_restaurant_query(q):
+        loc = _get_location(session_id)
+        if not loc:
+            return "位置情報が未設定です。LINEの＋ボタンから位置情報を送ってください。"
+
+        return _search_hotpepper_with_expansion(
+            session_id=session_id,
+            lat=float(loc["lat"]),
+            lng=float(loc["lng"]),
+            keyword=q,
+            start_range=2,
+            count=20,
+        )
 
     return None
 

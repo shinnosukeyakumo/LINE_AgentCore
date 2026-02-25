@@ -27,6 +27,29 @@ Runtime側の依存ライブラリです。
 7. RuntimeのSSEを逐次処理します。
 ツール開始時は進捗メッセージを先に push し、最終テキストブロックのみ本文として push します。
 
+## 動作イメージ
+
+### 位置情報の保存
+
+![alt text](image.png)
+
+ユーザーがLINEの「＋」から位置情報を送ると、Lambdaが `__set_location__` 形式に変換して Runtime に渡し、セッション単位で以下を保持します。
+
+1. 緯度経度（`lat` / `lng`）
+2. 位置タイトル（`title`）
+3. 住所（`address`）
+
+### web検索と周辺の飲食店検索
+
+![alt text](image-1.png)
+
+会話の意図に応じて処理を分岐します。
+
+1. 一般情報の質問は `websearch`（Tavily API）で補助回答します。
+2. 飲食店の検索・おすすめは `restaurant_search`（Hotpepper API）を優先して実行します。
+3. 「〇〇駅西口周辺の居酒屋」のような駅出口指定がある場合は、出口条件を優先して候補を並び替え、反対出口（例: 東口）候補を避けるようにしています。
+4. 候補提示時は位置情報を伏せ、ユーザーが番号や店名を選んだ後に `restaurant_location` で地図リンクを返します。
+
 ## Runtime 内部ロジック
 
 ### 1. セッション状態
@@ -105,6 +128,7 @@ Tavily APIで一般Web検索します。
 | `MODEL_ID` | 実質必須 | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | 利用するBedrockモデルID |
 | `TAVILY_API_KEY` | 任意 | コード内デフォルト値 | Web検索用APIキー |
 | `RECRUIT_HOTPEPPER_API_KEY` | 任意 | コード内デフォルト値 | Hotpepper APIキー |
+| `SEARCH_DEBUG` | 任意 | `0` | `1` でHotpepper検索候補（試行キーワード/件数）をRuntimeログへ出力 |
 
 ## セットアップの最小手順
 

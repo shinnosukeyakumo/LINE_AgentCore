@@ -106,7 +106,19 @@ agents:
       first_invoke_memory_check_done: true
       was_created_by_toolkit: true
     identity:
-      credential_providers: []
+      credential_providers:
+      - name: HotpepperM2MProvider
+        arn: arn:aws:bedrock-agentcore:us-west-2:017820658462:token-vault/default/oauth2credentialprovider/HotpepperM2MProvider
+        type: cognito
+        callback_url: https://bedrock-agentcore.us-west-2.amazonaws.com/identities/oauth2/callback/c3cff989-19d6-490b-a8db-91a9a41b5d2c
+      - name: TavilyM2MProvider
+        arn: arn:aws:bedrock-agentcore:us-west-2:017820658462:token-vault/default/oauth2credentialprovider/TavilyM2MProvider
+        type: cognito
+        callback_url: https://bedrock-agentcore.us-west-2.amazonaws.com/identities/oauth2/callback/bdc4c31f-d3d6-488d-8f1f-5b38fdc080f8
+      - name: GatewayAuthProvider
+        arn: arn:aws:bedrock-agentcore:us-west-2:017820658462:token-vault/default/oauth2credentialprovider/GatewayAuthProvider
+        type: cognito
+        callback_url: https://bedrock-agentcore.us-west-2.amazonaws.com/identities/oauth2/callback/45a57de4-b9f5-4963-95ca-af28ee2b2449
       workload: null
     aws_jwt:
       enabled: false

@@ -1,148 +1,354 @@
-# LINE x AgentCore 飲食店サポートエージェント
+# LINE × AgentCore 飲食店サポートエージェント
 
-LINEメッセージを受け取り、Amazon Bedrock AgentCore Runtime 上のエージェントに処理を委譲して、近隣の飲食店提案と位置案内を行うPoC実装です。
+LINEメッセージを受け取り、Amazon Bedrock AgentCore Runtime 上の**マルチエージェント**に処理を委譲して、近隣の飲食店提案と位置案内を行う PoC 実装です。
 
-## 構成
+---
 
-1. `lambda/lambda_function.py`
-LINE Webhook を受ける入口です。署名検証、AgentCore Runtime呼び出し、SSE応答のLINE送信を担当します。
+## クイックスタート
 
-2. `src/agent.py`
-AgentCore Runtime 側の本体です。決定論ロジックと LLM + ツール呼び出しを統合しています。
+```bash
+# AgentCore Runtime + Lambda を一括デプロイ
+./deploy.sh
+```
 
-3. `src/requirements.txt`
-Runtime側の依存ライブラリです。
+> `./deploy.sh` は以下を自動で実行します:
+> 1. `agentcore deploy` でコードを AgentCore Runtime にアップロード
+> 2. `update-agent-runtime` で環境変数を再設定（デプロイで上書きされるため）
+> 3. Lambda `bedrock-agentcore-line-bot` のコードを更新
+
+---
+
+## アーキテクチャ全体図
+
+![アーキテクチャ](architecture.svg)
+
+```
+[LINE ユーザー]
+    ↓ Webhook
+[API Gateway]
+    ↓
+[Lambda: lambda_function.py]
+  署名検証 / SSEストリーム処理 / Flexメッセージ生成
+    ↓ invoke / SSE stream
+[Bedrock AgentCore Runtime]
+    ↓
+  [監督エージェント]
+    ├─ delegate_to_restaurant ──→ [飲食店専門家]
+    │                               ↓ MCPClient
+    │                           [AgentCore Gateway]
+    │                               ↓
+    │                           [hotpepper_gateway_tool Lambda]
+    │                               ↓ @requires_access_token (M2M)
+    │                           [Hotpepper API]
+    │
+    └─ delegate_to_websearch ──→ [Web検索専門家]
+                                    ↓ MCPClient
+                                [AgentCore Gateway]
+                                    ↓
+                                [websearch_gateway_tool Lambda]
+                                    ↓ @requires_access_token (M2M)
+                                [Tavily API]
+
+[AgentCore Identity]  ← APIキーをM2M認証で安全に管理
+[AgentCore Memory]    ← ユーザーの訪問履歴・嗜好を永続記録
+```
+
+---
+
+## AWSリソース一覧（us-west-2）
+
+| リソース | ID / 名前 |
+|---|---|
+| AgentCore Runtime ID | `line_agentcore-dsoclNGvM6` |
+| Lambda 関数名 | `bedrock-agentcore-line-bot` |
+| AgentCore Memory ID | `line_agentcore_mem-9qQz574MzM` |
+| Gateway URL | `https://line-agentcore-searchgateway-chfuqejvmv.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp` |
+| S3 バケット（コードソース） | `bedrock-agentcore-codebuild-sources-017820658462-us-west-2` |
+
+---
+
+## 構成ファイル
+
+### Lambda（`lambda/`）
+
+| ファイル | 役割 |
+|---|---|
+| `lambda_function.py` | LINE Webhook の入口。署名検証・SSEストリーム処理・Flexメッセージ送信 |
+| `hotpepper_gateway_tool.py` | Gateway に登録される Hotpepper 検索 Lambda ツール |
+| `websearch_gateway_tool.py` | Gateway に登録される Web 検索 Lambda ツール |
+| `map_handler.py` | ユーザーの訪問済み店舗マップを提供する Lambda |
+
+### AgentCore Runtime（`src/`）
+
+| ファイル | 役割 |
+|---|---|
+| `agent.py` | エントリポイント。監督・飲食店・Web検索の3エージェントを定義しオーケストレート |
+| `hotpepper.py` | Hotpepper API 検索・キーワード処理・スコアリング・フォーマット |
+| `session_state.py` | セッション単位のインメモリ状態管理（位置情報・嗜好・推薦候補） |
+| `web_search.py` | Tavily API を使った Web 検索 |
+| `http_utils.py` | HTTP クライアント共通ユーティリティ |
+| `agentcore_memory.py` | AgentCore Memory への訪問記録保存・嗜好検索（長期記憶） |
+| `requirements.txt` | Runtime 側の依存ライブラリ |
+
+### セットアップスクリプト（`setup/`）
+
+| ファイル | 役割 |
+|---|---|
+| `setup_identity.py` | AgentCore Identity に Hotpepper / Tavily の認証情報を M2M プロバイダーとして登録 |
+| `setup_gateway.py` | AgentCore Gateway を作成し、2つの Lambda ツールを MCP ツールとして登録 |
+
+---
+
+## マルチエージェント構成
+
+```
+[監督エージェント]  ← すべてのユーザー入力を受け取り意図を判断
+   │
+   ├─ delegate_to_restaurant ──→ [飲食店専門家エージェント]
+   │                                  ├─ hotpepper_search  (Gateway MCP → Hotpepper API)
+   │                                  └─ restaurant_location (地図リンク生成)
+   │
+   └─ delegate_to_websearch ───→ [Web検索専門家エージェント]
+                                       └─ web_search  (Gateway MCP → Tavily API)
+```
+
+| エージェント | 担当 | キャッシュ |
+|---|---|---|
+| 監督エージェント | 意図判断・ルーティング・挨拶対応 | セッション単位（会話履歴保持）|
+| 飲食店専門家 | Hotpepper 検索・店舗選択 | セッション単位（状態保持）|
+| Web検索専門家 | Tavily 一般検索 | 全セッション共有（ステートレス）|
+
+### Gateway フォールバック
+
+`GATEWAY_URL` が設定されていない場合、各エージェントは直接 APIキー（`HOTPEPPER_API_KEY` / `TAVILY_API_KEY`）を使ってフォールバック動作します。開発・PoC 環境では Gateway なしでも動作します。
+
+---
 
 ## 処理フロー
 
-1. LINE から Webhook が Lambda に到達します。
-2. Lambda が `x-line-signature` を検証します。不正なら `400` を返します。
-3. `message` イベントのみ処理します。
-4. 送信元に応じて `reply_to` を決定します。
-`groupId` → `roomId` → `userId` の優先順です。
-5. `session_id` は `reply_to` をそのまま使います（チャット単位のセッション）。
-6. メッセージ種別で分岐します。
-テキストならそのまま `prompt` として AgentCore Runtime に送信します。
-位置情報なら `__set_location__ {json}` 形式に変換して送信します。
-7. RuntimeのSSEを逐次処理します。
-ツール開始時は進捗メッセージを先に push し、最終テキストブロックのみ本文として push します。
+### 1. 位置情報の保存
 
-## 動作イメージ
+1. ユーザーが LINE の「＋」から位置情報を送信
+2. Lambda が `__set_location__ {json}` 形式に変換して AgentCore に送信
+3. 決定論ハンドラで即座に処理し、セッションに緯度経度・住所・タイトルを保存
 
-### 位置情報の保存
+### 2. Web検索と周辺の飲食店検索
 
-![alt text](image.png)
+1. 監督エージェントがユーザーの意図を解析してルーティング
+2. 飲食店の質問 → `delegate_to_restaurant` → 飲食店専門家エージェント → Gateway → Hotpepper API
+3. 一般的な質問 → `delegate_to_websearch` → Web検索専門家エージェント → Gateway → Tavily API
+4. 飲食店は **1件のみ**推薦（住所・座標は伏せる）
+5. 推薦後に「✅ ここに決定 / 🔄 再度検索」の Flex メッセージを表示
+6. 決定ボタン押下で位置情報（Google Maps リンク）を送信し、嗜好を AgentCore Memory に記録
 
-ユーザーがLINEの「＋」から位置情報を送ると、Lambdaが `__set_location__` 形式に変換して Runtime に渡し、セッション単位で以下を保持します。
-
-1. 緯度経度（`lat` / `lng`）
-2. 位置タイトル（`title`）
-3. 住所（`address`）
-
-### web検索と周辺の飲食店検索
-
-![alt text](image-1.png)
-
-会話の意図に応じて処理を分岐します。
-
-1. 一般情報の質問は `websearch`（Tavily API）で補助回答します。
-2. 飲食店の検索・おすすめは `restaurant_search`（Hotpepper API）を優先して実行します。
-3. 「〇〇駅西口周辺の居酒屋」のような駅出口指定がある場合は、出口条件を優先して候補を並び替え、反対出口（例: 東口）候補を避けるようにしています。
-4. 候補提示時は位置情報を伏せ、ユーザーが番号や店名を選んだ後に `restaurant_location` で地図リンクを返します。
+---
 
 ## Runtime 内部ロジック
 
-### 1. セッション状態
+### 1. セッション状態（`session_state.py`）
 
-インメモリ辞書で2種類の状態を保持します。
+インメモリ辞書で 4 種類の状態を保持します。
 
-1. `_SESSION_LOCATION`
-セッション単位の最後の位置情報（緯度経度、住所、タイトル）。
+| 変数 | 内容 |
+|---|---|
+| `_SESSION_LOCATION` | セッション単位の最後の位置情報（緯度経度・住所・タイトル）|
+| `_SESSION_RECOMMENDATIONS` | 直近で提示した店舗候補（1件）|
+| `_SESSION_PREFERENCES` | 確定済みジャンル・訪問済み店名（インメモリ + AgentCore Memory）|
+| `_SESSION_SHOP_READY` | 確認ボタン送出用の確認待ち店舗（LLM を経由させずに保持）|
 
-2. `_SESSION_RECOMMENDATIONS`
-直近で提示した店舗候補（最大5件）。
+> **注意**: インメモリのためコールドスタートやスケールアウトで失われます。長期記憶は AgentCore Memory で永続化されます。
 
-注意: どちらもメモリ保持なので、コールドスタートやスケールアウトで失われる可能性があります。
+### 2. 特殊コマンド処理（LLM 不要）
 
-### 2. 決定論ハンドリング（LLMを呼ぶ前）
+`_handle_special_command` が以下を決定論で処理します。
 
-`_deterministic_response` が次を先に処理します。
+| コマンド | 処理内容 |
+|---|---|
+| `__set_location__ {json}` | 位置情報を保存し推薦候補をクリア |
+| `__confirm__ {json}` | 訪問済み店舗を `_SESSION_PREFERENCES` と AgentCore Memory に記録 |
 
-1. `__set_location__` コマンド
-位置情報を保存し、候補一覧をクリアします。
+### 3. `__SHOP_CONFIRM__` マーカーの仕組み
 
-2. 候補選択メッセージ
-「2件目」「これがいい」「店名指定」などを解釈し、該当店舗の詳細と地図リンクを返します。
+LLM を経由させると確認ボタン用のマーカーが消えてしまうため、以下の方法で確実に届けます。
 
-3. 挨拶
-挨拶文はツールを使わず固定応答します。
+```
+Hotpepper 検索 → _set_recommendations()
+    └─→ _SESSION_SHOP_READY[session_id] に店舗データを保存
+監督エージェントのストリーム終了後
+    └─→ _pop_shop_ready() → "__SHOP_CONFIRM__:{json}" を独立ブロックで yield
+Lambda が全ブロックをスキャンして検出 → Flex メッセージ送信
+```
 
-### 3. LLM + ツール実行
+### 4. AgentCore Memory（`agentcore_memory.py`）
 
-決定論で確定しない入力は `strands.Agent` に委譲します。使用ツールは3つです。
+「ここに決定」ボタン押下時に訪問確定情報を AgentCore Memory に永続記録します。
 
-1. `restaurant_search`
-Hotpepper APIで周辺店舗を検索します。
-範囲は `range_level` を開始値として段階的に拡張します（最大3000m）。
-候補提示時は住所・座標・地図リンクを出しません。
+- `record_restaurant_visit()`: 店名・ジャンルを Memory に `create_event` で記録
+- `retrieve_user_preferences()`: セマンティック検索で過去の嗜好を取得（TTL 5分キャッシュ）
+- コールドスタート後も過去の訪問履歴・嗜好をエージェントのプロンプトに注入できます
 
-2. `restaurant_location`
-直近候補からユーザー選択を解釈し、住所・座標・地図リンクを返します。
+---
 
-3. `websearch`
-Tavily APIで一般Web検索します。
+## Lambda の SSE 処理仕様
 
-## Lambda のSSE処理仕様
+`process_sse_stream` は Bedrock Converse Stream 形式を処理します。
 
-`process_sse_stream` は Bedrock Converse Stream 形式を前提に以下を処理します。
+| イベント | 処理 |
+|---|---|
+| `contentBlockDelta.delta.text` | 本文をバッファに連結 |
+| `contentBlockStart.start.toolUse` | ツール名に応じた日本語ステータスを push |
+| `contentBlockStop` | ブロック確定。`__SHOP_CONFIRM__:` 行を検出した場合は `pending_shop_data` に保存し `last_text_block` は更新しない |
+| ストリーム終了後 | `pending_shop_data` があれば本文テキスト + Flex メッセージを送信 |
 
-1. `contentBlockDelta.delta.text`
-本文をバッファに連結します。
-
-2. `contentBlockStart.start.toolUse`
-ツール実行開始を検知し、ツール名に応じた日本語ステータスメッセージを push します。
-
-3. `contentBlockStop`
-ブロック確定時点の本文を `last_text_block` として保持します。
-
-4. 最後に `last_text_block` のみ送信します（`FINAL_TEXT_LIMIT` で上限カット）。
+---
 
 ## 環境変数
 
-### Lambda (`lambda/lambda_function.py`)
+### Lambda（`lambda/lambda_function.py`）
 
 | 変数名 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
-| `LINE_CHANNEL_SECRET` | 必須 | なし | LINE署名検証用シークレット |
-| `LINE_CHANNEL_ACCESS_TOKEN` | 必須 | なし | LINE Messaging API送信用トークン |
-| `AGENTCORE_RUNTIME_ARN` | 必須 | なし | 呼び出し先 AgentCore Runtime ARN |
-| `AGENTCORE_REGION` | 任意 | `us-west-2` | Runtime 呼び出しリージョン |
-| `LOADING_SECONDS` | 任意 | `60` | LINEローディング表示秒数（5-60） |
-| `MIN_SEND_INTERVAL` | 任意 | `1.0` | push最小送信間隔（秒） |
-| `FINAL_TEXT_LIMIT` | 任意 | `5000` | 最終本文の最大文字数 |
+| `LINE_CHANNEL_SECRET` | ✅ | なし | LINE 署名検証用シークレット |
+| `LINE_CHANNEL_ACCESS_TOKEN` | ✅ | なし | LINE Messaging API 送信用トークン |
+| `AGENTCORE_RUNTIME_ARN` | ✅ | なし | 呼び出し先 AgentCore Runtime ARN |
+| `AGENTCORE_REGION` | | `us-west-2` | Runtime 呼び出しリージョン |
+| `LOADING_SECONDS` | | `60` | LINE ローディング表示秒数（5〜60）|
+| `MIN_SEND_INTERVAL` | | `1.0` | push 最小送信間隔（秒）|
+| `FINAL_TEXT_LIMIT` | | `5000` | 最終本文の最大文字数 |
 
-### Runtime (`src/agent.py`)
+### Runtime（`src/agent.py`）
 
 | 変数名 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
-| `MODEL_ID` | 実質必須 | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | 利用するBedrockモデルID |
-| `TAVILY_API_KEY` | 任意 | コード内デフォルト値 | Web検索用APIキー |
-| `RECRUIT_HOTPEPPER_API_KEY` | 任意 | コード内デフォルト値 | Hotpepper APIキー |
-| `SEARCH_DEBUG` | 任意 | `0` | `1` でHotpepper検索候補（試行キーワード/件数）をRuntimeログへ出力 |
+| `MODEL_ID` | 実質必須 | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | 利用する Bedrock モデル ID |
+| `AGENTCORE_MEMORY_ID` | | `line_agentcore_mem-9qQz574MzM` | AgentCore Memory の ID |
+| `AGENTCORE_REGION` | | `us-west-2` | AgentCore Memory / Gateway のリージョン |
+| `GATEWAY_URL` | | `` (空) | Gateway MCP エンドポイント URL |
+| `GATEWAY_PROVIDER_NAME` | | `GatewayAuthProvider` | Gateway 認証用 Identity プロバイダー名 |
+| `HOTPEPPER_API_KEY` | | `` | フォールバック用 Hotpepper API キー（Gateway 未使用時のみ必要）|
+| `TAVILY_API_KEY` | | `` | フォールバック用 Tavily API キー（Gateway 未使用時のみ必要）|
+| `SEARCH_DEBUG` | | `0` | `1` で Hotpepper 検索デバッグログを出力 |
 
-## セットアップの最小手順
+### Gateway ツール Lambda（`lambda/hotpepper_gateway_tool.py` / `websearch_gateway_tool.py`）
 
-1. Runtime依存をインストールします。
+| 変数名 | 必須 | 説明 |
+|---|---|---|
+| `HOTPEPPER_API_KEY` | ✅ | Hotpepper API キー |
+| `TAVILY_API_KEY` | ✅ | Tavily API キー |
+
+---
+
+## セットアップ手順（新規環境向け）
+
+> **既存環境へのデプロイは `./deploy.sh` のみで OK です。**
+> 以下は Gateway / Identity を一から構築する場合の手順です。
+
+### 前提条件
+
+- AWS CLI / `aws login` で認証済み
+- Python 仮想環境を有効化済み: `source .venv/bin/activate`
+- LINE Developers でチャンネル作成済み
+
+### 1. 依存ライブラリをインストール
+
 ```bash
 pip install -r src/requirements.txt
 ```
-2. AgentCore Runtime に `src/agent.py` をデプロイし、環境変数を設定します。
-3. Lambda をデプロイして `lambda/lambda_function.py` を設定し、環境変数を設定します。
-4. API Gateway などで LINE Webhook を Lambda に接続します。
-5. LINE Developers 側で Webhook URL を設定し、疎通確認します。
+
+### 2. AgentCore Identity にAPIキーを登録
+
+Cognito User Pool と App Client を事前に作成した上で実行します。
+
+```bash
+HOTPEPPER_API_KEY=<HotpepperのAPIキー> \
+TAVILY_API_KEY=<TavilyのAPIキー> \
+COGNITO_DISCOVERY_URL=https://cognito-idp.us-west-2.amazonaws.com/<UserPoolId>/.well-known/openid-configuration \
+COGNITO_CLIENT_ID=<CognitoクライアントID> \
+COGNITO_CLIENT_SECRET=<Cognitoクライアントシークレット> \
+python setup/setup_identity.py
+```
+
+→ `setup/identity_config.json` が生成されます。
+
+### 3. Gateway ツール Lambda をデプロイ
+
+```bash
+cd lambda/
+zip hotpepper_gateway_tool.zip hotpepper_gateway_tool.py
+aws lambda create-function \
+  --function-name hotpepper_gateway_tool \
+  --runtime python3.12 \
+  --zip-file fileb://hotpepper_gateway_tool.zip \
+  --handler hotpepper_gateway_tool.lambda_handler \
+  --region us-west-2
+
+zip websearch_gateway_tool.zip websearch_gateway_tool.py
+aws lambda create-function \
+  --function-name websearch_gateway_tool \
+  --runtime python3.12 \
+  --zip-file fileb://websearch_gateway_tool.zip \
+  --handler websearch_gateway_tool.lambda_handler \
+  --region us-west-2
+```
+
+### 4. AgentCore Gateway を作成
+
+```bash
+HOTPEPPER_LAMBDA_ARN=arn:aws:lambda:us-west-2:<アカウントID>:function:hotpepper_gateway_tool \
+WEBSEARCH_LAMBDA_ARN=arn:aws:lambda:us-west-2:<アカウントID>:function:websearch_gateway_tool \
+python setup/setup_gateway.py
+```
+
+→ `setup/gateway_config.json` と Runtime に設定すべき環境変数が出力されます。
+
+### 5. AgentCore Runtime にデプロイ
+
+```bash
+./deploy.sh
+```
+
+- Handler: `invoke_agent`（`@app.entrypoint` の関数名）
+- `GATEWAY_URL` / `GATEWAY_PROVIDER_NAME` は `deploy.sh` 内に記載済み
+
+### 6. Webhook Lambda をデプロイ
+
+`./deploy.sh` の Step 3 で自動実行されます。手動で行う場合:
+
+```bash
+cd lambda/
+zip -q function.zip lambda_function.py
+aws lambda update-function-code \
+  --function-name bedrock-agentcore-line-bot \
+  --zip-file fileb://function.zip \
+  --region us-west-2
+```
+
+### 7. API Gateway → LINE Webhook を接続
+
+1. API Gateway で HTTP API を作成（POST /webhook）
+2. Lambda と統合
+3. **エンドポイント URL を LINE Developers の Webhook URL に設定**
+4. 「Verify」で疎通確認 ✅
+
+---
+
+## ログ確認
+
+```bash
+# AgentCore Runtime ログ
+aws logs tail /aws/bedrock-agentcore/runtimes/line_agentcore-dsoclNGvM6-DEFAULT \
+  --log-stream-name-prefix "$(date +%Y/%m/%d)/[runtime-logs" --follow
+
+# Lambda ログ
+aws logs tail /aws/lambda/bedrock-agentcore-line-bot --follow
+```
+
+---
 
 ## 運用上の注意
 
-1. `src/agent.py` には APIキーのデフォルト値が記述されています。実運用では必ず環境変数で上書きし、コード側の埋め込み値は削除してください。
-2. セッション状態はインメモリのため永続化されません。運用では DynamoDB などの外部ストア利用を推奨します。
-3. Lambdaは本文を最終ブロック1通で返す設計です。逐次全文表示が必要なら `process_sse_stream` の送信戦略を変更してください。
+1. **APIキー管理**: Gateway を使うと `HOTPEPPER_API_KEY` / `TAVILY_API_KEY` を Identity で安全管理できます。Gateway なしのフォールバック環境では環境変数で直接指定してください。
+2. **セッション状態の永続化**: インメモリのためコールドスタートで失われます。本番運用では DynamoDB などの外部ストア利用を推奨します。長期嗜好記憶は AgentCore Memory で永続化されます。
+3. **`__SHOP_CONFIRM__` マーカー**: LLM を経由させず `_SESSION_SHOP_READY` 経由で送出しているため、監督エージェントが書き換えても確認ボタンは正常に動作します。
+4. **スケールアウト対策**: Lambda がスケールアウトすると `_PENDING_SHOPS`（確認待ち店舗）がコンテナ間で共有されません。本番では DynamoDB に移行してください。
+5. **Reply API の使用**: Push API（有料・レート制限あり）ではなく Reply API（無制限・無料）を使用しています。replyToken の有効期限（約30秒）内に返信する必要があります。

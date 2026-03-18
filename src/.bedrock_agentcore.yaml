@@ -98,7 +98,7 @@ agents:
       execution_role: null
       source_bucket: null
     memory:
-      mode: STM_ONLY
+      mode: STM_AND_LTM
       memory_id: line_agentcore_mem-9qQz574MzM
       memory_arn: arn:aws:bedrock-agentcore:us-west-2:017820658462:memory/line_agentcore_mem-9qQz574MzM
       memory_name: line_agentcore_mem

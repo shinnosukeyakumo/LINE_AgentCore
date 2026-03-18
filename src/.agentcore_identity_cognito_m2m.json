@@ -1,0 +1,23 @@
+{
+  "runtime": {
+    "pool_id": "us-west-2_ON4TOq2EJ",
+    "client_id": "456c3uleql1dtrthlmbl43747q",
+    "discovery_url": "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_ON4TOq2EJ/.well-known/openid-configuration",
+    "domain_prefix": "agentcore-runtime-dc3c3b65",
+    "username": "testusercf06280d",
+    "password": "*zLTzV0yar86_PqW"
+  },
+  "identity": {
+    "pool_id": "us-west-2_SlifcLn0F",
+    "client_id": "1gvmu109tverk5qfqfd0jb1dk6",
+    "client_secret": "mg898eggr5dm9ld90bufkfvnhhvhi1qu9fn3gmpbuispbfcsir1",
+    "token_endpoint": "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_SlifcLn0F/oauth2/token",
+    "resource_server_identifier": "agentcore-m2m-8ab9665e",
+    "scopes": [
+      "read",
+      "write"
+    ],
+    "flow_type": "client_credentials"
+  },
+  "flow_type": "m2m"
+}

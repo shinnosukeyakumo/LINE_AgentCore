@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="650" viewBox="0 0 900 650" font-family="'Helvetica Neue',Arial,sans-serif">
+  <defs>
+    <marker id="g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#555"/>
+    </marker>
+    <marker id="b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#2980B9"/>
+    </marker>
+    <marker id="o" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#E67E22"/>
+    </marker>
+    <marker id="n" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0,8 3,0 6" fill="#27AE60"/>
+    </marker>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="2" dy="2" stdDeviation="3" flood-color="#00000022"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="650" fill="#F0F3F4" rx="12"/>
+
+  <!-- ══════════════════════════════════════════════
+       Title
+  ══════════════════════════════════════════════ -->
+  <text x="450" y="36" text-anchor="middle" font-size="18" font-weight="bold" fill="#1A252F">
+    LINE × AgentCore  マルチエージェント アーキテクチャ
+  </text>
+
+  <!-- ══════════════════════════════════════════════
+       TOP ROW:  LINE → API Gateway → Lambda
+  ══════════════════════════════════════════════ -->
+
+  <!-- LINE -->
+  <rect x="40" y="60" width="110" height="65" rx="10" fill="#06C755" filter="url(#shadow)"/>
+  <text x="95" y="87" text-anchor="middle" font-size="15" font-weight="bold" fill="white">LINE</text>
+  <text x="95" y="107" text-anchor="middle" font-size="11" fill="white">ユーザー</text>
+
+  <!-- → API Gateway -->
+  <line x1="152" y1="92" x2="198" y2="92" stroke="#555" stroke-width="2" marker-end="url(#g)"/>
+  <text x="175" y="85" text-anchor="middle" font-size="9" fill="#555">Webhook</text>
+
+  <!-- API Gateway -->
+  <rect x="200" y="60" width="130" height="65" rx="10" fill="#8E44AD" filter="url(#shadow)"/>
+  <text x="265" y="86" text-anchor="middle" font-size="11" font-weight="bold" fill="white">API Gateway</text>
+  <text x="265" y="104" text-anchor="middle" font-size="9" fill="#E8DAEF">Amazon</text>
+
+  <!-- → Lambda -->
+  <line x1="332" y1="92" x2="378" y2="92" stroke="#555" stroke-width="2" marker-end="url(#g)"/>
+
+  <!-- Lambda -->
+  <rect x="380" y="50" width="185" height="85" rx="10" fill="#FF9900" filter="url(#shadow)"/>
+  <text x="472" y="79" text-anchor="middle" font-size="13" font-weight="bold" fill="white">AWS Lambda</text>
+  <text x="472" y="97" text-anchor="middle" font-size="10" fill="white">署名検証 / SSEストリーム処理</text>
+  <text x="472" y="114" text-anchor="middle" font-size="9" fill="#FFF3CD">Flex メッセージ生成 / 確認ボタン送信</text>
+
+  <!-- Lambda → AgentCore (invoke) -->
+  <line x1="486" y1="137" x2="486" y2="170" stroke="#555" stroke-width="2" marker-end="url(#g)"/>
+  <text x="506" y="157" font-size="9" fill="#555">invoke</text>
+
+  <!-- AgentCore → Lambda (SSE stream) -->
+  <line x1="458" y1="170" x2="458" y2="137" stroke="#555" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#g)"/>
+  <text x="370" y="157" font-size="9" fill="#555">SSE stream</text>
+
+  <!-- ══════════════════════════════════════════════
+       AgentCore Runtime  (大枠)
+  ══════════════════════════════════════════════ -->
+  <rect x="38" y="175" width="828" height="448" rx="14" fill="#EAF4FB" stroke="#2980B9" stroke-width="2.5" stroke-dasharray="10,5"/>
+  <text x="452" y="200" text-anchor="middle" font-size="12" font-weight="bold" fill="#1A5276">
+    Amazon Bedrock AgentCore Runtime  (src/)
+  </text>
+
+  <!-- ── 監督エージェント ── -->
+  <rect x="260" y="212" width="380" height="112" rx="12" fill="#1A5276" filter="url(#shadow)"/>
+  <text x="450" y="243" text-anchor="middle" font-size="14" font-weight="bold" fill="white">🎯 監督エージェント</text>
+  <text x="450" y="263" text-anchor="middle" font-size="11" fill="#AED6F1">意図解析・ルーティング・挨拶対応</text>
+  <text x="450" y="281" text-anchor="middle" font-size="10" fill="#7FB3D3">strands.Agent  /  agent.py</text>
+  <text x="450" y="298" text-anchor="middle" font-size="9" fill="#5D9DC4">Tools:  delegate_to_restaurant  |  delegate_to_websearch</text>
+  <text x="450" y="315" text-anchor="middle" font-size="9" fill="#5D9DC4">セッション毎に会話履歴を保持（AgentCore Memory）</text>
+
+  <!-- 監督 → 飲食店 -->
+  <line x1="310" y1="324" x2="212" y2="390" stroke="#2980B9" stroke-width="2.5" marker-end="url(#b)"/>
+  <!-- 監督 → Web検索 -->
+  <line x1="590" y1="324" x2="685" y2="390" stroke="#2980B9" stroke-width="2.5" marker-end="url(#b)"/>
+
+  <!-- ── 飲食店専門家エージェント ── -->
+  <rect x="50" y="393" width="325" height="112" rx="12" fill="#784212" filter="url(#shadow)"/>
+  <text x="212" y="422" text-anchor="middle" font-size="13" font-weight="bold" fill="white">🍜 飲食店専門家エージェント</text>
+  <text x="212" y="442" text-anchor="middle" font-size="10" fill="#FAD7A0">Tools: restaurant_search / restaurant_location</text>
+  <text x="212" y="460" text-anchor="middle" font-size="9" fill="#E59866">Hotpepper API で周辺1件を推薦</text>
+  <text x="212" y="477" text-anchor="middle" font-size="9" fill="#E59866">strands.Agent（セッション毎にキャッシュ）</text>
+  <text x="212" y="496" text-anchor="middle" font-size="8" fill="#D4A76A">hotpepper.py / session_state.py</text>
+
+  <!-- ── Web検索専門家エージェント ── -->
+  <rect x="530" y="393" width="295" height="112" rx="12" fill="#145A32" filter="url(#shadow)"/>
+  <text x="677" y="422" text-anchor="middle" font-size="13" font-weight="bold" fill="white">🔍 Web検索専門家エージェント</text>
+  <text x="677" y="446" text-anchor="middle" font-size="10" fill="#A9DFBF">Tools: websearch</text>
+  <text x="677" y="464" text-anchor="middle" font-size="9" fill="#82E0AA">Tavily API で一般Web検索</text>
+  <text x="677" y="482" text-anchor="middle" font-size="9" fill="#82E0AA">strands.Agent（全セッション共有）</text>
+  <text x="677" y="496" text-anchor="middle" font-size="8" fill="#58D68D">web_search.py</text>
+
+  <!-- 飲食店 → Hotpepper -->
+  <line x1="212" y1="507" x2="212" y2="543" stroke="#E67E22" stroke-width="2" marker-end="url(#o)"/>
+  <!-- Web検索 → Tavily -->
+  <line x1="677" y1="507" x2="677" y2="543" stroke="#27AE60" stroke-width="2" marker-end="url(#n)"/>
+
+  <!-- ── Hotpepper API ── -->
+  <rect x="78" y="546" width="265" height="55" rx="10" fill="white" stroke="#E67E22" stroke-width="2" filter="url(#shadow)"/>
+  <text x="210" y="570" text-anchor="middle" font-size="12" font-weight="bold" fill="#E67E22">Hotpepper API</text>
+  <text x="210" y="589" text-anchor="middle" font-size="9" fill="#E59866">周辺飲食店検索（Recruit）</text>
+
+  <!-- ── Tavily API ── -->
+  <rect x="560" y="546" width="220" height="55" rx="10" fill="white" stroke="#27AE60" stroke-width="2" filter="url(#shadow)"/>
+  <text x="670" y="570" text-anchor="middle" font-size="12" font-weight="bold" fill="#27AE60">Tavily API</text>
+  <text x="670" y="589" text-anchor="middle" font-size="9" fill="#58D68D">一般Web検索</text>
+
+  <!-- ── インメモリ セッション状態 ── -->
+  <rect x="367" y="546" width="175" height="55" rx="8" fill="white" stroke="#85929E" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="454" y="566" text-anchor="middle" font-size="10" font-weight="bold" fill="#2C3E50">インメモリ セッション状態</text>
+  <text x="454" y="581" text-anchor="middle" font-size="8" fill="#7F8C8D">LOCATION / PREFERENCES</text>
+  <text x="454" y="594" text-anchor="middle" font-size="8" fill="#7F8C8D">SHOP_READY / AGENTS</text>
+
+  <!-- 小さい接続線（監督 ↔ Session State） -->
+  <line x1="450" y1="324" x2="454" y2="544" stroke="#AAB7B8" stroke-width="1" stroke-dasharray="4,3"/>
+</svg>

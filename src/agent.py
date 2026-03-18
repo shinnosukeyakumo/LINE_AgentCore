@@ -385,6 +385,7 @@ def _supervisor_system_prompt(session_id: str) -> str:
 ・マークダウン記法（**太字**、*斜体*、# 見出し、- 箇条書き）を一切使わないこと。プレーンテキストのみ。
 ・「2件目にする」「これにする」のような曖昧なメッセージでも必ず delegate_to_restaurant に委譲すること。自分で判断して直接返答しないこと。
 ・出力はLINE向けに簡潔な日本語。
+・【最重要】会話履歴に過去の飲食店情報があっても、飲食店に関するリクエストは毎回必ず delegate_to_restaurant を呼ぶこと。過去の回答を流用して直接返答することは絶対禁止。最新の検索結果を取得すること。
 
 {loc_text}"""
 
@@ -444,6 +445,8 @@ def _build_supervisor(session_id: str, session_manager: Any = None) -> Agent:
         "model": BedrockModel(model_id=MODEL_ID),
         "system_prompt": _supervisor_system_prompt(session_id),
         "tools": [delegate_to_restaurant, delegate_to_websearch],
+        # session_id を OTEL スパンに含めて Observability ダッシュボードのセッション数を有効化
+        "trace_attributes": {"session.id": session_id, "gen_ai.conversation.id": session_id},
     }
     if session_manager is not None:
         agent_kwargs["session_manager"] = session_manager
@@ -451,10 +454,26 @@ def _build_supervisor(session_id: str, session_manager: Any = None) -> Agent:
 
 
 def _get_or_create_supervisor(session_id: str) -> Agent:
-    # 毎回新規作成: AgentCoreMemorySessionManager が古い会話履歴を復元して
-    # delegate_to_restaurant を呼ばなくなる問題を防ぐ。
-    # 嗜好情報は _supervisor_system_prompt 内の _get_preference_text で渡す。
-    return _build_supervisor(session_id, session_manager=None)
+    # AgentCoreMemorySessionManager を有効化して Observability にセッション情報を記録する。
+    # ただし supervisor が会話履歴を流用して delegate_to_restaurant をスキップする問題を防ぐため、
+    # system_prompt に「会話履歴があっても必ず委譲」ルールを追加している。
+    session_manager = None
+    if _MEMORY_SESSION_AVAILABLE:
+        try:
+            config = AgentCoreMemoryConfig(
+                memory_id=AGENTCORE_MEMORY_ID,
+                session_id=f"supervisor-{session_id}",
+                actor_id=session_id,
+            )
+            session_manager = AgentCoreMemorySessionManager(
+                agentcore_memory_config=config,
+                region_name=AGENTCORE_REGION,
+            )
+            print(f"[DEBUG _get_or_create_supervisor] SessionManager created for session_id={session_id}", flush=True)
+        except Exception as exc:
+            print(f"[WARN] AgentCoreMemorySessionManager creation failed: {exc}", flush=True)
+            session_manager = None
+    return _build_supervisor(session_id, session_manager=session_manager)
 
 
 # ==============================================================
